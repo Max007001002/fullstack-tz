@@ -4,6 +4,8 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from aio_pika import connect_robust
@@ -17,6 +19,8 @@ log = logging.getLogger("worker")
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 QUEUE_NAME = os.getenv("RABBITMQ_QUEUE", "browse_tasks")
 SELENIUM_REMOTE_URL = os.getenv("SELENIUM_REMOTE_URL", "http://localhost:4444/wd/hub")
+OUTPUT_DIR_ENV = os.getenv("OUTPUT_DIR")
+OUTPUT_DIR = Path(OUTPUT_DIR_ENV) if OUTPUT_DIR_ENV else None
 
 
 def fetch_html(url: str) -> str:
@@ -53,12 +57,40 @@ def fetch_html(url: str) -> str:
             driver.quit()
 
 
+def save_result(task_id: str, url: str, html: str, output_dir: Path) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    html_path = output_dir / f"{task_id}.html"
+    meta_path = output_dir / f"{task_id}.json"
+
+    html_path.write_text(html, encoding="utf-8", errors="replace")
+    meta_path.write_text(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "url": url,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    return html_path, meta_path
+
+
 async def handle_message(payload: dict[str, Any]) -> None:
     url = payload["url"]
     task_id = str(payload.get("task_id") or uuid.uuid4())
 
     log.info("Start task_id=%s url=%s", task_id, url)
     html = await asyncio.to_thread(fetch_html, url)
+
+    if OUTPUT_DIR is not None:
+        html_path, meta_path = await asyncio.to_thread(save_result, task_id, url, html, OUTPUT_DIR)
+        log.info("Saved task_id=%s html=%s meta=%s", task_id, html_path, meta_path)
 
     log.info("HTML task_id=%s url=%s\n%s", task_id, url, html)
     log.info("Done task_id=%s", task_id)

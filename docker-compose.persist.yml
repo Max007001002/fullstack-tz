@@ -1,0 +1,7 @@
+services:
+  worker:
+    environment:
+      OUTPUT_DIR: /data/html
+    volumes:
+      - ./data:/data
+
