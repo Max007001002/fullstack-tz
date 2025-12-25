@@ -1,0 +1,71 @@
+services:
+  api:
+    build: ./backend/api
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_QUEUE: browse_tasks
+    ports:
+      - "${API_PORT:-8001}:8000" # единственный публичный порт
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build: ./backend/worker
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_QUEUE: browse_tasks
+      SELENIUM_REMOTE_URL: http://selenium-hub:4444/wd/hub
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      selenium-hub:
+        condition: service_healthy
+      chrome:
+        condition: service_started
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    # ports: []  # НЕ публикуем наружу
+
+  selenium-hub:
+    image: selenium/hub:4.39.0-20251212
+    healthcheck:
+      test: ["CMD", "/opt/bin/check-grid.sh", "--host", "0.0.0.0", "--port", "4444"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # ports: []  # НЕ публикуем наружу
+
+  chrome:
+    image: selenium/node-chromium:4.39.0-20251212
+    shm_size: 2gb
+    depends_on:
+      selenium-hub:
+        condition: service_started
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+
+volumes:
+  rabbitmq_data:
